@@ -186,6 +186,11 @@ int OnInit()
       Print("HarmonicNavi: Pivot strength and ATR period must be >= 1");
       return INIT_PARAMETERS_INCORRECT;
      }
+   if(InpSLMode == HN_SL_ATR && InpSLATR <= 0.0)
+     {
+      Print("HarmonicNavi: SL distance (x ATR) must be > 0 in ATR stop mode");
+      return INIT_PARAMETERS_INCORRECT;
+     }
 
    SetIndexBuffer(0, g_buyBuf,  INDICATOR_DATA);
    SetIndexBuffer(1, g_sellBuf, INDICATOR_DATA);
@@ -199,6 +204,8 @@ int OnInit()
    PlotIndexSetInteger(1, PLOT_ARROW, 234);
    PlotIndexSetInteger(0, PLOT_ARROW_SHIFT, 12);
    PlotIndexSetInteger(1, PLOT_ARROW_SHIFT, -12);
+   PlotIndexSetInteger(0, PLOT_LINE_COLOR, InpBuyColor);
+   PlotIndexSetInteger(1, PLOT_LINE_COLOR, InpSellColor);
 
    IndicatorSetString(INDICATOR_SHORTNAME, "HarmonicNavi");
    IndicatorSetInteger(INDICATOR_DIGITS, _Digits);
@@ -425,8 +432,8 @@ void CloseTrade(HNTrade &t, const int res, const datetime when)
       else
          g_slAfterT1++;
       if(InpAlertHits)
-         Notify(SideName(t.dir) + " " + g_patName[t.pat] + ": Stop " +
-                DoubleToString(t.sl, _Digits) + " hit (after T" + IntegerToString(t.stage) + ")");
+         Notify(SideName(t.dir) + " " + g_patName[t.pat] + ": Stop " + DoubleToString(t.sl, _Digits) +
+                ((t.stage == 0) ? " hit before T1" : " hit after T" + IntegerToString(t.stage)));
      }
    if(res == HN_RES_TIMEOUT)
       g_timeouts++;
@@ -697,13 +704,15 @@ bool BuildSetup(const HNSwing &x, const HNSwing &a, const HNSwing &b, const HNSw
       if(CD >= best)
          continue;
 
-      best  = CD;
-      found = true;
-
       //--- targets are computed from the rounded (displayed) entry and stop
       double en   = NormalizeDouble(d, _Digits);
       double sn   = NormalizeDouble(sl, _Digits);
       double risk = MathAbs(en - sn);
+      if(risk < _Point * 0.5)
+         continue;
+
+      best  = CD;
+      found = true;
       double top  = (dir > 0) ? MathMax(a.price, c.price) : MathMin(a.price, c.price);
       double leg  = MathAbs(top - en);
       double m1, m2, m3, unit;
@@ -906,7 +915,7 @@ void RefreshDrawings(const datetime tNow)
      {
       if(g_tr[k].finalDrawn)
          continue;
-      DrawTrade(g_tr[k], tFut);
+      DrawTrade(g_tr[k], tNow, tFut);
       if(g_tr[k].result != HN_OPEN)
          g_tr[k].finalDrawn = true;
      }
@@ -920,16 +929,16 @@ void RefreshDrawings(const datetime tNow)
          ObjectsDeleteAll(0, pf);
      }
 
+//--- the panel is rebuilt last so it stays on top of the chart objects
+   ObjectsDeleteAll(0, g_prefix + "S_");
    if(InpShowStats)
       DrawStats();
-   else
-      ObjectsDeleteAll(0, g_prefix + "S_");
 
    ChartRedraw(0);
   }
 
 //+------------------------------------------------------------------+
-void DrawTrade(const HNTrade &t, const datetime tFut)
+void DrawTrade(const HNTrade &t, const datetime tNow, const datetime tFut)
   {
    string   pf     = TradePrefix(t.id);
    bool     isOpen = (t.result == HN_OPEN);
@@ -970,10 +979,12 @@ void DrawTrade(const HNTrade &t, const datetime tFut)
    TextObj(pf + "lt2", tEnd, t.t2,     " T2 " + DoubleToString(t.t2, _Digits),     InpTargetColor, InpFontSize, ANCHOR_LEFT);
    TextObj(pf + "lt3", tEnd, t.t3,     " T3 " + DoubleToString(t.t3, _Digits),     InpTargetColor, InpFontSize, ANCHOR_LEFT);
 
-//--- route arrow Entry -> T1 (solid once T1 is reached)
+//--- route arrow Entry -> T1 (dashed towards the current bar until T1 is reached, then solid)
    if(InpShowNavArrow && (isOpen || t.stage >= 1))
      {
-      datetime ta = (t.stage >= 1) ? t.tHit1 : tEnd;
+      datetime ta = (t.stage >= 1) ? t.tHit1 : tNow;
+      if(ta <= t.tEntry)
+         ta = (datetime)((long)t.tEntry + (long)ps);
       TrendObj(pf + "nav", t.tEntry, t.entry, ta, t.t1, dc,
                (t.stage >= 1) ? STYLE_SOLID : STYLE_DASH, (t.stage >= 1) ? 2 : 1);
       ArrowObj(pf + "nvh", OBJ_ARROW, ta, t.t1, dc, bull ? 233 : 234, bull ? ANCHOR_BOTTOM : ANCHOR_TOP);
